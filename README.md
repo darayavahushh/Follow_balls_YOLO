@@ -64,6 +64,13 @@ football_cv/
 │ ├── trajectory.py              # Trajectory tracking (coming soon)
 │ └── bev.py                     # Bird's eye view (coming soon)
 │
+├── tools/
+│   ├── __init__.py              # Package initialization
+│   ├── config_loader.py         # Configuration loading utilities
+│   ├── visualization.py         # Drawing bboxes, labels, overlays
+│   ├── video_io.py              # Video reading/writing utilities
+│   └── detection_utils.py       # Detection processing utilities
+│
 ├── data/
 │ └── V1/                        # Dataset from HuggingFace
 │ │ ├── images/

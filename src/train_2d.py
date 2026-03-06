@@ -8,71 +8,44 @@ Usage:
     python src/train_2d.py --config configs/config.yaml
     python src/train_2d.py --config configs/config.yaml --epochs 50
 
-Author: Darius Firan
+Author: [Your Name]
 Challenge: Computer Vision - Football Detection & Tracking
 =============================================================================
 """
 
+# =============================================================================
+# IMPORTS
+# =============================================================================
+
+# Standard library imports
 import os
 import sys
 import shutil
 import argparse
 from pathlib import Path
-from tqdm import tqdm
+from typing import Dict, Any
+
+# Add project root to path for imports
+PROJECT_ROOT = Path(__file__).parent.parent.resolve()
+sys.path.insert(0, str(PROJECT_ROOT))
+
+# Third-party imports
 import yaml
+from tqdm import tqdm
 
-
-# =============================================================================
-# CONFIGURATION LOADER
-# =============================================================================
-
-def load_config(config_path: str) -> dict:
-    """
-    Load configuration from YAML file.
-    
-    Args:
-        config_path: Path to config.yaml
-        
-    Returns:
-        Configuration dictionary
-    """
-    config_path = Path(config_path)
-    
-    if not config_path.exists():
-        raise FileNotFoundError(f"Configuration file not found: {config_path}")
-    
-    with open(config_path, 'r') as f:
-        config = yaml.safe_load(f)
-    
-    return config
-
-
-def resolve_paths(config: dict, project_root: Path) -> dict:
-    """
-    Resolve relative paths in config to absolute paths.
-    
-    Args:
-        config: Configuration dictionary
-        project_root: Project root directory
-        
-    Returns:
-        Config with resolved absolute paths
-    """
-    paths = config.get('paths', {})
-    
-    # Resolve each path
-    for key, value in paths.items():
-        if value and not Path(value).is_absolute():
-            paths[key] = str(project_root / value)
-    
-    return config
+# Local imports from tools
+from tools.config_loader import load_config, resolve_paths
 
 
 # =============================================================================
 # DATASET PREPROCESSING
 # =============================================================================
 
-def remap_label_file(input_path: Path, output_path: Path, class_mapping: dict) -> int:
+def remap_label_file(
+    input_path: Path, 
+    output_path: Path, 
+    class_mapping: Dict[int, int]
+) -> int:
     """
     Remap class IDs in a single YOLO format label file.
     
@@ -90,7 +63,7 @@ def remap_label_file(input_path: Path, output_path: Path, class_mapping: dict) -
     annotations_count = 0
     new_lines = []
     
-    with open(input_path, 'r') as f:
+    with open(input_path, 'r', encoding='utf-8') as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -111,15 +84,25 @@ def remap_label_file(input_path: Path, output_path: Path, class_mapping: dict) -
             annotations_count += 1
     
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
+    with open(output_path, 'w', encoding='utf-8') as f:
         f.write("\n".join(new_lines))
     
     return annotations_count
 
 
-def prepare_dataset(config: dict) -> Path:
+def prepare_dataset(config: Dict[str, Any]) -> Path:
     """
     Prepare dataset with remapped classes.
+    
+    Creates structure:
+        dataset_processed/
+        ├── images/
+        │   ├── train/
+        │   └── val/
+        ├── labels/
+        │   ├── train/
+        │   └── val/
+        └── data.yaml
     
     Args:
         config: Configuration dictionary
@@ -133,14 +116,21 @@ def prepare_dataset(config: dict) -> Path:
     
     source_dir = Path(config['paths']['source_dataset'])
     output_dir = Path(config['paths']['processed_dataset'])
+    
+    # Convert string keys to int for class mapping
     class_mapping = {int(k): v for k, v in config['classes']['mapping'].items()}
     class_names = {int(k): v for k, v in config['classes']['names'].items()}
+    
+    # Validate source directory
+    if not source_dir.exists():
+        raise FileNotFoundError(f"Source dataset not found: {source_dir}")
     
     # Clean previous processed data
     if output_dir.exists():
         print(f"Removing existing processed dataset at {output_dir}")
         shutil.rmtree(output_dir)
     
+    # Map source splits to destination splits
     split_mapping = {"train": "train", "test": "val"}
     stats = {"images": 0, "labels": 0, "annotations": 0}
     
@@ -152,32 +142,47 @@ def prepare_dataset(config: dict) -> Path:
         dst_images_dir = output_dir / "images" / dst_split
         dst_labels_dir = output_dir / "labels" / dst_split
         
+        # Validate source directories
+        if not src_images_dir.exists():
+            print(f"  ⚠️ Warning: {src_images_dir} not found, skipping...")
+            continue
+            
         dst_images_dir.mkdir(parents=True, exist_ok=True)
         dst_labels_dir.mkdir(parents=True, exist_ok=True)
         
+        # Get all image files
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.webp'}
-        image_files = [f for f in src_images_dir.iterdir() 
-                       if f.suffix.lower() in image_extensions]
+        image_files = [
+            f for f in src_images_dir.iterdir() 
+            if f.suffix.lower() in image_extensions
+        ]
         
         print(f"  Found {len(image_files)} images")
         
         for img_path in tqdm(image_files, desc=f"  Copying {dst_split}"):
+            # Copy image
             dst_img_path = dst_images_dir / img_path.name
             shutil.copy2(img_path, dst_img_path)
             stats["images"] += 1
             
+            # Process corresponding label
             label_name = img_path.stem + ".txt"
             src_label_path = src_labels_dir / label_name
             dst_label_path = dst_labels_dir / label_name
             
             if src_label_path.exists():
-                ann_count = remap_label_file(src_label_path, dst_label_path, class_mapping)
+                ann_count = remap_label_file(
+                    src_label_path, 
+                    dst_label_path, 
+                    class_mapping
+                )
                 stats["labels"] += 1
                 stats["annotations"] += ann_count
             else:
+                # Create empty label file (background image)
                 dst_label_path.touch()
     
-    # Create data.yaml
+    # Create data.yaml for YOLO training
     data_yaml_content = {
         "path": str(output_dir.absolute()),
         "train": "images/train",
@@ -187,14 +192,14 @@ def prepare_dataset(config: dict) -> Path:
     }
     
     yaml_path = output_dir / "data.yaml"
-    with open(yaml_path, 'w') as f:
+    with open(yaml_path, 'w', encoding='utf-8') as f:
         yaml.dump(data_yaml_content, f, default_flow_style=False, sort_keys=False)
     
     print(f"\n✅ Dataset prepared successfully!")
-    print(f"    Images: {stats['images']}")
-    print(f"    Labels: {stats['labels']}")
-    print(f"    Annotations: {stats['annotations']}")
-    print(f"    Config: {yaml_path}")
+    print(f"   📊 Images: {stats['images']}")
+    print(f"   📝 Labels: {stats['labels']}")
+    print(f"   🏷️  Annotations: {stats['annotations']}")
+    print(f"   📄 Config: {yaml_path}")
     
     return yaml_path
 
@@ -203,7 +208,7 @@ def prepare_dataset(config: dict) -> Path:
 # MODEL TRAINING
 # =============================================================================
 
-def train_model(data_yaml_path: Path, config: dict) -> Path:
+def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
     """
     Fine-tune YOLO26 on the prepared dataset.
     
@@ -214,6 +219,7 @@ def train_model(data_yaml_path: Path, config: dict) -> Path:
     Returns:
         Path to best model weights
     """
+    # Import here to avoid loading heavy dependencies during preprocessing
     from ultralytics import YOLO
     
     model_config = config['model']
@@ -228,7 +234,12 @@ def train_model(data_yaml_path: Path, config: dict) -> Path:
     print(f"   Batch Size: {train_config['batch_size']}")
     print("=" * 60)
     
+    # Load pretrained model
     model = YOLO(model_config['name'])
+    
+    # Create output directory
+    models_dir = Path(config['paths']['models_dir'])
+    models_dir.mkdir(parents=True, exist_ok=True)
     
     # Build training arguments from config
     train_args = {
@@ -244,7 +255,7 @@ def train_model(data_yaml_path: Path, config: dict) -> Path:
         "batch": train_config['batch_size'],
         
         # Output
-        "project": config['paths']['models_dir'],
+        "project": str(models_dir),
         "name": "train_run",
         "exist_ok": True,
         
@@ -277,11 +288,13 @@ def train_model(data_yaml_path: Path, config: dict) -> Path:
         "save_period": train_config['checkpoints']['save_period'],
     }
     
+    # Start training
     model.train(**train_args)
     
-    best_model_path = Path(config['paths']['models_dir']) / "train_run" / "weights" / "best.pt"
+    best_model_path = models_dir / "train_run" / "weights" / "best.pt"
+    
     print(f"\n✅ Training complete!")
-    print(f"    Best model saved to: {best_model_path}")
+    print(f"   📦 Best model saved to: {best_model_path}")
     
     return best_model_path
 
@@ -290,9 +303,21 @@ def train_model(data_yaml_path: Path, config: dict) -> Path:
 # VALIDATION
 # =============================================================================
 
-def validate_model(model_path: Path, data_yaml_path: Path, config: dict):
+def validate_model(
+    model_path: Path, 
+    data_yaml_path: Path, 
+    config: Dict[str, Any]
+) -> Any:
     """
     Run validation metrics on trained model.
+    
+    Args:
+        model_path: Path to trained weights (best.pt)
+        data_yaml_path: Path to data.yaml
+        config: Configuration dictionary
+    
+    Returns:
+        Validation metrics object
     """
     from ultralytics import YOLO
     
@@ -300,18 +325,19 @@ def validate_model(model_path: Path, data_yaml_path: Path, config: dict):
     print("📊 VALIDATING MODEL")
     print("=" * 60)
     
-    model = YOLO(model_path)
+    model = YOLO(str(model_path))
     metrics = model.val(data=str(data_yaml_path), verbose=True)
     
-    class_names = config['classes']['names']
+    class_names = {int(k): v for k, v in config['classes']['names'].items()}
     
-    print(f"\n📈 Validation Results:")
+    print(f"\n   Validation Results:")
     print(f"   mAP50:    {metrics.box.map50:.4f}")
     print(f"   mAP50-95: {metrics.box.map:.4f}")
     
     print(f"\n   Per-class AP50:")
     for i, ap in enumerate(metrics.box.ap50):
-        print(f"     {class_names[i]}: {ap:.4f}")
+        class_name = class_names.get(i, f"class_{i}")
+        print(f"     {class_name}: {ap:.4f}")
     
     return metrics
 
@@ -320,7 +346,9 @@ def validate_model(model_path: Path, data_yaml_path: Path, config: dict):
 # MAIN PIPELINE
 # =============================================================================
 
-def main():
+def main() -> None:
+    """Main training pipeline execution."""
+    
     parser = argparse.ArgumentParser(
         description="Train YOLO26 for football detection",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -351,12 +379,9 @@ def main():
     
     args = parser.parse_args()
     
-    # Determine project root (parent of src/)
-    project_root = Path(__file__).parent.parent
-    
     # Load and resolve config
     config = load_config(args.config)
-    config = resolve_paths(config, project_root)
+    config = resolve_paths(config, PROJECT_ROOT)
     
     # Apply CLI overrides
     if args.epochs is not None:
@@ -368,13 +393,18 @@ def main():
     print("⚽ BALL 2D DETECTION - TRAINING PIPELINE")
     print("=" * 60)
     print(f"   Config: {args.config}")
-    print(f"   Project Root: {project_root}")
+    print(f"   Project Root: {PROJECT_ROOT}")
     
     # Step 1: Prepare dataset
     if not args.skip_preprocessing:
         data_yaml_path = prepare_dataset(config)
     else:
         data_yaml_path = Path(config['paths']['processed_dataset']) / "data.yaml"
+        if not data_yaml_path.exists():
+            raise FileNotFoundError(
+                f"Processed dataset not found: {data_yaml_path}\n"
+                "Run without --skip-preprocessing first."
+            )
         print(f"⏭️  Skipping preprocessing, using: {data_yaml_path}")
     
     # Step 2: Train model
