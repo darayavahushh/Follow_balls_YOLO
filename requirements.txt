@@ -1,0 +1,41 @@
+# =============================================================================
+# Ball Detection & Tracking - Dependencies
+# =============================================================================
+# 
+# Install with:
+#   pip install -r requirements.txt
+#
+# For GPU support, ensure CUDA 11.8+ is installed on your system.
+# Check CUDA version: nvcc --version
+#
+# =============================================================================
+
+# PyTorch with CUDA support - adjust based on your CUDA version
+# For CUDA 11.8: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118
+# For CUDA 12.1: pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+# For CPU only: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.0.0
+torchvision>=0.15.0
+# TensorBoard logging during training
+tensorboard>=2.14.0
+# Ultralytics YOLO models, training utilities, and inference engine
+ultralytics>=8.2.0
+# OpenCV for video I/O and image manipulation
+opencv-python>=4.8.0
+
+
+# NumPy for numerical operations
+numpy>=1.24.0,<2.0.0
+# Pillow for image loading (required by torchvision)
+Pillow>=9.0.0
+# YAML parsing for config files
+PyYAML>=6.0
+
+# Progress bars for training and processing
+tqdm>=4.65.0
+# Dataset Download from HuggingFace
+huggingface_hub>=0.19.0
+datasets>=2.14.0
+# Plotting and visualization
+matplotlib>=3.7.0
