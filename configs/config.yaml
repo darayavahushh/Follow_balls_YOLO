@@ -1,0 +1,204 @@
+# =============================================================================
+# BALL DETECTION & TRACKING
+# =============================================================================
+# This file centralizes all configurable parameters for the project.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# PROJECT PATHS - relative to the project root directory
+# -----------------------------------------------------------------------------
+paths:
+  # Input video file for inference
+  input_video: "rgb.avi"
+  
+  # Source dataset directory (downloaded from HuggingFace)
+  source_dataset: "data/V1"
+  
+  # Output directories (created automatically)
+  output_root: "outputs"
+  processed_dataset: "outputs/datasets/processed"
+  models_dir: "outputs/models"
+  results_dir: "outputs/results"
+
+
+# -----------------------------------------------------------------------------
+# MODEL CONFIGURATION (YOLO26)
+# -----------------------------------------------------------------------------
+model:
+  name: "yolo26s.pt"  # yolo26m.pt
+  image_size: 640
+  confidence_threshold: 0.3
+  iou_threshold: 0.45
+
+
+# -----------------------------------------------------------------------------
+# TRAINING CONFIGURATION
+# -----------------------------------------------------------------------------
+training:
+  epochs: 100
+  batch_size: 16
+  patience: 20    # stop if no improvement for N epochs
+  
+  # Learning rate settings
+  optimizer:
+    name: "AdamW"           # Optimizer: SGD, Adam, AdamW
+    lr_initial: 0.001       # Initial learning rate
+    lr_final_factor: 0.01
+    weight_decay: 0.0005    # L2 regularization
+    warmup_epochs: 3
+  
+  # Data augmentation settings
+  augmentation:
+    enabled: true
+    mosaic: 1.0
+    mixup: 0.15
+    copy_paste: 0.1
+    scale: 0.5
+  
+  loss_weights:
+    box: 7.5                # Bounding box loss weight
+    cls: 0.5                # Classification loss weight
+  
+  # Hardware settings
+  hardware:
+    device: 0               # GPU device ID (0, 1, ...) or "cpu"
+    workers: 8              # DataLoader worker processes
+  
+  # Checkpoint settings
+  checkpoints:
+    save_period: 20         # Save checkpoint every N epochs (0 = disabled)
+    save_best: true         # Always save best model
+
+
+# -----------------------------------------------------------------------------
+# CLASS CONFIGURATION
+# -----------------------------------------------------------------------------
+classes:
+  # Class ID mapping: original_id -> new_id
+  # This merges player and referee into a single "person" class
+  mapping:
+    0: 0    # player  -> person
+    1: 1    # ball    -> ball
+    2: 0    # referee -> person
+  
+  # Class names for the remapped classes
+  names:
+    0: "person"
+    1: "ball"
+  
+  # Number of classes (explicit for clarity)
+  num_classes: 2
+
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION CONFIGURATION
+# -----------------------------------------------------------------------------
+visualization:
+  colors:
+    person: [255, 100, 0]     # Blue-orange
+    ball: [0, 255, 0]         # Bright green
+    default: [128, 128, 128]  # Gray for unknown classes
+  
+  # Bounding box settings
+  bbox:
+    thickness_default: 2
+    thickness_ball: 3         # Thicker lines for ball
+    
+  # Label settings
+  labels:
+    font_scale: 0.6
+    font_thickness: 2
+    show_confidence: true     # Show confidence score in label
+    
+  # Frame overlay settings
+  overlay:
+    show_frame_number: true
+    show_ball_status: true
+    font_scale: 0.8
+    color: [0, 255, 255]      # Yellow (BGR)
+
+
+# -----------------------------------------------------------------------------
+# INFERENCE CONFIGURATION  
+# -----------------------------------------------------------------------------
+inference:
+  show_preview: false         # Display video preview during inference (can slow down processing)
+  ball_only: false            # Only detect and track ball (ignore persons)
+  video_codec: "XVID"         # Output video codec (XVID, MJPG, mp4v)
+  output_patterns:            # {video_name} is replaced with input video filename (without extension)
+    video: "{video_name}_2d_detected.avi"
+    detections: "{video_name}_detections.json"
+
+
+# -----------------------------------------------------------------------------
+# INTEL REALSENSE D435i CAMERA PARAMETERS
+# -----------------------------------------------------------------------------
+# These parameters are used for 3D detection and BEV transformation.
+# The values below are typical defaults for D435i RGB camera.
+# For accurate results, calibrate your specific camera.
+#
+# Reference: https://www.intelrealsense.com/depth-camera-d435i/
+
+camera:
+  intrinsics:
+    # Focal lengths in pixels (how much the image is "zoomed")
+    fx: 615.0
+    fy: 615.0
+    # Principal point (optical center) in pixels
+    cx: 320.0
+    cy: 240.0
+    # Image resolution these intrinsics correspond to
+    width: 640
+    height: 480
+  
+  # Distortion coefficients (radial and tangential, zeros if undistorted images)
+  distortion:
+    k1: 0.0
+    k2: 0.0
+    p1: 0.0
+    p2: 0.0
+    k3: 0.0
+  
+  # Standard FIFA football diameter: 22 cm (size 5)
+  reference_objects:
+    football_diameter_cm: 22.0
+
+
+# -----------------------------------------------------------------------------
+# FUTURE: 3D DETECTION CONFIGURATION (Placeholder)
+# -----------------------------------------------------------------------------
+detection_3d:
+  enabled: false  # Will be enabled in Step 2
+  
+  # Method for depth estimation without depth sensor
+  # Options: "pinhole_projection", "size_reference", "stereo"
+  depth_method: "size_reference"
+
+
+# -----------------------------------------------------------------------------
+# FUTURE: TRAJECTORY TRACKING CONFIGURATION (Placeholder)
+# -----------------------------------------------------------------------------
+trajectory:
+  enabled: false  # Will be enabled in Step 3
+  
+  # Tracking algorithm: "kalman", "sort", "deepsort"
+  algorithm: "kalman"
+  
+  # Trajectory visualization
+  trail_length: 10          # Number of past positions to draw
+  trail_color: [0, 255, 255]  # Yellow trail
+
+
+# -----------------------------------------------------------------------------
+# FUTURE: BEV (Bird's Eye View) CONFIGURATION (Placeholder)
+# -----------------------------------------------------------------------------
+bev:
+  enabled: false  # Will be enabled in Step 4
+  
+  # Output BEV map dimensions in pixels
+  map_width: 800
+  map_height: 600
+  
+  # Scale: pixels per meter
+  scale: 50
