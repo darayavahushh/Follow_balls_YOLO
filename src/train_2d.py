@@ -1,6 +1,6 @@
 """
 =============================================================================
-Football 2D Detection - Training Pipeline
+Ball 2D Detection - Training Pipeline
 =============================================================================
 Fine-tunes YOLO26 on a soccer dataset for detecting persons and ball.
 
@@ -9,7 +9,7 @@ Usage:
     python src/train_2d.py --config configs/config.yaml --epochs 50
 
 Author: [Your Name]
-Challenge: Computer Vision - Football Detection & Tracking
+Challenge: Computer Vision - Ball Detection & Tracking
 =============================================================================
 """
 
@@ -18,10 +18,10 @@ Challenge: Computer Vision - Football Detection & Tracking
 # =============================================================================
 
 # Standard library imports
-import os
 import sys
 import shutil
 import argparse
+import time
 from pathlib import Path
 from typing import Dict, Any
 
@@ -35,6 +35,15 @@ from tqdm import tqdm
 
 # Local imports from tools
 from tools.config_loader import load_config, resolve_paths
+from tools.logging_utils import setup_logger, log_summary, ProgressLogger
+from tools.run_manager import RunManager
+
+
+# =============================================================================
+# CONSTANTS
+# =============================================================================
+
+OPERATION_NAME = "train_2d"
 
 
 # =============================================================================
@@ -48,9 +57,6 @@ def remap_label_file(
 ) -> int:
     """
     Remap class IDs in a single YOLO format label file.
-    
-    YOLO format per line: <class_id> <x_center> <y_center> <width> <height>
-    All values normalized to [0, 1]
     
     Args:
         input_path: Source label file (.txt)
@@ -90,29 +96,21 @@ def remap_label_file(
     return annotations_count
 
 
-def prepare_dataset(config: Dict[str, Any]) -> Path:
+def prepare_dataset(config: Dict[str, Any], logger) -> Path:
     """
     Prepare dataset with remapped classes.
     
-    Creates structure:
-        dataset_processed/
-        ├── images/
-        │   ├── train/
-        │   └── val/
-        ├── labels/
-        │   ├── train/
-        │   └── val/
-        └── data.yaml
-    
     Args:
         config: Configuration dictionary
+        logger: Logger instance
         
     Returns:
         Path to generated data.yaml
     """
-    print("\n" + "=" * 60)
-    print("📁 PREPARING DATASET")
-    print("=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("📁 PREPARING DATASET")
+    logger.info("=" * 60)
     
     source_dir = Path(config['paths']['source_dataset'])
     output_dir = Path(config['paths']['processed_dataset'])
@@ -123,11 +121,16 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
     
     # Validate source directory
     if not source_dir.exists():
+        logger.error(f"Source dataset not found: {source_dir}")
         raise FileNotFoundError(f"Source dataset not found: {source_dir}")
+    
+    logger.debug(f"Source directory: {source_dir}")
+    logger.debug(f"Output directory: {output_dir}")
+    logger.debug(f"Class mapping: {class_mapping}")
     
     # Clean previous processed data
     if output_dir.exists():
-        print(f"Removing existing processed dataset at {output_dir}")
+        logger.debug(f"Removing existing processed dataset at {output_dir}")
         shutil.rmtree(output_dir)
     
     # Map source splits to destination splits
@@ -135,7 +138,7 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
     stats = {"images": 0, "labels": 0, "annotations": 0}
     
     for src_split, dst_split in split_mapping.items():
-        print(f"\n→ Processing '{src_split}' → '{dst_split}'...")
+        logger.info(f"→ Processing '{src_split}' → '{dst_split}'...")
         
         src_images_dir = source_dir / "images" / src_split
         src_labels_dir = source_dir / "labels" / src_split
@@ -144,7 +147,7 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
         
         # Validate source directories
         if not src_images_dir.exists():
-            print(f"  ⚠️ Warning: {src_images_dir} not found, skipping...")
+            logger.warning(f"  ⚠️ {src_images_dir} not found, skipping...")
             continue
             
         dst_images_dir.mkdir(parents=True, exist_ok=True)
@@ -157,9 +160,10 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
             if f.suffix.lower() in image_extensions
         ]
         
-        print(f"  Found {len(image_files)} images")
+        logger.info(f"  Found {len(image_files)} images")
+        logger.debug(f"  Copying images and remapping labels...")
         
-        for img_path in tqdm(image_files, desc=f"  Copying {dst_split}"):
+        for img_path in tqdm(image_files, desc=f"  {dst_split}", disable=False):
             # Copy image
             dst_img_path = dst_images_dir / img_path.name
             shutil.copy2(img_path, dst_img_path)
@@ -195,11 +199,13 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
     with open(yaml_path, 'w', encoding='utf-8') as f:
         yaml.dump(data_yaml_content, f, default_flow_style=False, sort_keys=False)
     
-    print(f"\n✅ Dataset prepared successfully!")
-    print(f"   📊 Images: {stats['images']}")
-    print(f"   📝 Labels: {stats['labels']}")
-    print(f"   🏷️  Annotations: {stats['annotations']}")
-    print(f"   📄 Config: {yaml_path}")
+    logger.info("")
+    logger.info("✅ Dataset prepared successfully!")
+    logger.info(f"      Images: {stats['images']}")
+    logger.info(f"      Labels: {stats['labels']}")
+    logger.info(f"      Annotations: {stats['annotations']}")
+    
+    logger.debug(f"Data YAML saved to: {yaml_path}")
     
     return yaml_path
 
@@ -208,13 +214,20 @@ def prepare_dataset(config: Dict[str, Any]) -> Path:
 # MODEL TRAINING
 # =============================================================================
 
-def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
+def train_model(
+    data_yaml_path: Path, 
+    config: Dict[str, Any], 
+    run_manager: RunManager,
+    logger
+) -> Path:
     """
     Fine-tune YOLO26 on the prepared dataset.
     
     Args:
         data_yaml_path: Path to data.yaml configuration
         config: Configuration dictionary
+        run_manager: Run manager instance
+        logger: Logger instance
     
     Returns:
         Path to best model weights
@@ -225,21 +238,21 @@ def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
     model_config = config['model']
     train_config = config['training']
     
-    print("\n" + "=" * 60)
-    print("🚀 TRAINING MODEL")
-    print("=" * 60)
-    print(f"   Model: {model_config['name']}")
-    print(f"   Epochs: {train_config['epochs']}")
-    print(f"   Image Size: {model_config['image_size']}")
-    print(f"   Batch Size: {train_config['batch_size']}")
-    print("=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("🚀 TRAINING MODEL")
+    logger.info("=" * 60)
+    logger.info(f"   Model: {model_config['name']}")
+    logger.info(f"   Epochs: {train_config['epochs']}")
+    logger.info(f"   Image Size: {model_config['image_size']}")
+    logger.info(f"   Batch Size: {train_config['batch_size']}")
+    
+    logger.debug(f"Data YAML: {data_yaml_path}")
+    logger.debug(f"Output directory: {run_manager.models_dir}")
     
     # Load pretrained model
+    logger.debug(f"Loading pretrained model: {model_config['name']}")
     model = YOLO(model_config['name'])
-    
-    # Create output directory
-    models_dir = Path(config['paths']['models_dir'])
-    models_dir.mkdir(parents=True, exist_ok=True)
     
     # Build training arguments from config
     train_args = {
@@ -254,8 +267,8 @@ def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
         "imgsz": model_config['image_size'],
         "batch": train_config['batch_size'],
         
-        # Output
-        "project": str(models_dir),
+        # Output - use run manager's model directory
+        "project": str(run_manager.models_dir),
         "name": "train_run",
         "exist_ok": True,
         
@@ -281,20 +294,28 @@ def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
         "device": train_config['hardware']['device'],
         "workers": train_config['hardware']['workers'],
         
-        # Logging
+        # Logging - reduce verbosity since we handle it
         "verbose": True,
         "plots": True,
         "save": True,
         "save_period": train_config['checkpoints']['save_period'],
     }
     
+    logger.debug("Training arguments configured")
+    logger.info("")
+    logger.info("Starting YOLO training...")
+    logger.info("(This may take a while, check log file for details)")
+    
     # Start training
     model.train(**train_args)
     
-    best_model_path = models_dir / "train_run" / "weights" / "best.pt"
+    best_model_path = run_manager.get_model_path("best.pt")
     
-    print(f"\n✅ Training complete!")
-    print(f"   📦 Best model saved to: {best_model_path}")
+    logger.info("")
+    logger.info("✅ Training complete!")
+    logger.info(f"     Best model: {best_model_path}")
+    
+    logger.debug(f"Last model: {run_manager.get_model_path('last.pt')}")
     
     return best_model_path
 
@@ -306,8 +327,9 @@ def train_model(data_yaml_path: Path, config: Dict[str, Any]) -> Path:
 def validate_model(
     model_path: Path, 
     data_yaml_path: Path, 
-    config: Dict[str, Any]
-) -> Any:
+    config: Dict[str, Any],
+    logger
+) -> Dict[str, float]:
     """
     Run validation metrics on trained model.
     
@@ -315,31 +337,44 @@ def validate_model(
         model_path: Path to trained weights (best.pt)
         data_yaml_path: Path to data.yaml
         config: Configuration dictionary
+        logger: Logger instance
     
     Returns:
-        Validation metrics object
+        Dictionary with validation metrics
     """
     from ultralytics import YOLO
     
-    print("\n" + "=" * 60)
-    print("📊 VALIDATING MODEL")
-    print("=" * 60)
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("📊 VALIDATING MODEL")
+    logger.info("=" * 60)
+    
+    logger.debug(f"Model path: {model_path}")
+    logger.debug(f"Data YAML: {data_yaml_path}")
     
     model = YOLO(str(model_path))
-    metrics = model.val(data=str(data_yaml_path), verbose=True)
+    metrics = model.val(data=str(data_yaml_path), verbose=False)
     
     class_names = {int(k): v for k, v in config['classes']['names'].items()}
     
-    print(f"\n   Validation Results:")
-    print(f"   mAP50:    {metrics.box.map50:.4f}")
-    print(f"   mAP50-95: {metrics.box.map:.4f}")
+    results = {
+        "mAP50": float(metrics.box.map50),
+        "mAP50-95": float(metrics.box.map)
+    }
     
-    print(f"\n   Per-class AP50:")
+    logger.info("")
+    logger.info("📈 Validation Results:")
+    logger.info(f"   mAP50:    {results['mAP50']:.4f}")
+    logger.info(f"   mAP50-95: {results['mAP50-95']:.4f}")
+    
+    logger.info("")
+    logger.info("   Per-class AP50:")
     for i, ap in enumerate(metrics.box.ap50):
         class_name = class_names.get(i, f"class_{i}")
-        print(f"     {class_name}: {ap:.4f}")
+        logger.info(f"     {class_name}: {ap:.4f}")
+        results[f"AP50_{class_name}"] = float(ap)
     
-    return metrics
+    return results
 
 
 # =============================================================================
@@ -350,7 +385,7 @@ def main() -> None:
     """Main training pipeline execution."""
     
     parser = argparse.ArgumentParser(
-        description="Train YOLO26 for football detection",
+        description="Train YOLO26 for ball detection",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
@@ -379,6 +414,9 @@ def main() -> None:
     
     args = parser.parse_args()
     
+    # Record start time
+    start_time = time.time()
+    
     # Load and resolve config
     config = load_config(args.config)
     config = resolve_paths(config, PROJECT_ROOT)
@@ -389,37 +427,69 @@ def main() -> None:
     if args.batch_size is not None:
         config['training']['batch_size'] = args.batch_size
     
-    print("\n" + "=" * 60)
-    print("⚽ BALL 2D DETECTION - TRAINING PIPELINE")
-    print("=" * 60)
-    print(f"   Config: {args.config}")
-    print(f"   Project Root: {PROJECT_ROOT}")
+    # Create new run
+    run_manager = RunManager.create_new_run(config, PROJECT_ROOT)
+    run_manager.add_operation(OPERATION_NAME)
     
-    # Step 1: Prepare dataset
-    if not args.skip_preprocessing:
-        data_yaml_path = prepare_dataset(config)
-    else:
-        data_yaml_path = Path(config['paths']['processed_dataset']) / "data.yaml"
-        if not data_yaml_path.exists():
-            raise FileNotFoundError(
-                f"Processed dataset not found: {data_yaml_path}\n"
-                "Run without --skip-preprocessing first."
-            )
-        print(f"⏭️  Skipping preprocessing, using: {data_yaml_path}")
+    # Setup logger
+    log_path = run_manager.get_log_path(OPERATION_NAME)
+    logger = setup_logger(OPERATION_NAME, log_path, config)
     
-    # Step 2: Train model
-    best_model_path = train_model(data_yaml_path, config)
+    # Log run info
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("⚽ BALL 2D DETECTION - TRAINING PIPELINE")
+    logger.info("=" * 60)
+    logger.info(f"   Run ID: {run_manager.run_id}")
+    logger.info(f"   Config: {args.config}")
+    logger.info(f"   Log: {log_path}")
     
-    # Step 3: Validate
-    validate_model(best_model_path, data_yaml_path, config)
+    logger.debug(f"Project root: {PROJECT_ROOT}")
+    logger.debug(f"Run directory: {run_manager.run_dir}")
     
-    # Final summary
-    print("\n" + "=" * 60)
-    print("✅ PIPELINE COMPLETE")
-    print("=" * 60)
-    print(f"\n   Trained model: {best_model_path}")
-    print(f"\n   Next step - Run inference:")
-    print(f"   python src/inference_2d.py --config {args.config}")
+    try:
+        # Step 1: Prepare dataset
+        if not args.skip_preprocessing:
+            data_yaml_path = prepare_dataset(config, logger)
+        else:
+            data_yaml_path = Path(config['paths']['processed_dataset']) / "data.yaml"
+            if not data_yaml_path.exists():
+                logger.error(f"Processed dataset not found: {data_yaml_path}")
+                raise FileNotFoundError(
+                    f"Processed dataset not found: {data_yaml_path}\n"
+                    "Run without --skip-preprocessing first."
+                )
+            logger.info(f"⏭️  Skipping preprocessing, using: {data_yaml_path}")
+        
+        # Step 2: Train model
+        best_model_path = train_model(data_yaml_path, config, run_manager, logger)
+        
+        # Step 3: Validate
+        metrics = validate_model(best_model_path, data_yaml_path, config, logger)
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        
+        # Log summary
+        log_summary(logger, "SUCCESS", duration, metrics)
+        
+        # Final console output
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("✅ PIPELINE COMPLETE")
+        logger.info("=" * 60)
+        logger.info(f"   Run ID: {run_manager.run_id}")
+        logger.info(f"   Model: {best_model_path}")
+        logger.info(f"   Log: {log_path}")
+        logger.info("")
+        logger.info("🔜 Next step - Run inference:")
+        logger.info(f"   python src/inference_2d.py --config {args.config} --run-id {run_manager.run_id}")
+        
+    except Exception as e:
+        duration = time.time() - start_time
+        logger.error(f"Pipeline failed: {e}")
+        log_summary(logger, "FAILED", duration, {"error": str(e)})
+        raise
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Ball Detection & Tracking
 
-A comprehensive computer vision system for detecting and tracking a football in 2D, 3D, and Bird's Eye View (BEV). This project is developed as part of a Computer Vision challenge demonstrating object detection, tracking, and 3D reconstruction skills.
+A comprehensive computer vision system for detecting and tracking a ball in 2D, 3D, and Bird's Eye View (BEV). This project is developed as part of a Computer Vision challenge demonstrating object detection, tracking, and 3D reconstruction skills.
 
 ---
 
@@ -8,7 +8,6 @@ A comprehensive computer vision system for detecting and tracking a football in 
 
 - [Overview](#-overview)
 - [Features](#-features)
-- [Project Structure](#-project-structure)
 - [Prerequisites](#-prerequisites)
 - [Installation](#-installation)
   - [1. Clone Repository](#1-clone-repository)
@@ -30,7 +29,7 @@ A comprehensive computer vision system for detecting and tracking a football in 
 
 This project processes RGB video footage to:
 
-1. **2D Detection** - Detect the football and persons in each frame using YOLO26
+1. **2D Detection** - Detect the ball and persons in each frame using YOLO26
 2. **3D Detection** - Estimate the ball's 3D position (x, y, z) relative to the camera *(coming soon)*
 3. **Trajectory Tracking** - Track and visualize the ball's trajectory over time *(coming soon)*
 4. **Bird's Eye View (BEV)** - Generate a top-down view map of ball positions *(coming soon)*
@@ -46,57 +45,6 @@ The system is designed for the Intel RealSense D435i camera and uses a standard 
 - **Modular Design**: Each component (2D, 3D, BEV) works independently
 - **Real-time Capable**: YOLO26s achieves ~400 FPS on GPU
 - **Export Formats**: Outputs annotated videos and JSON detection data
-
----
-
-## 📁 Project Structure
-
-```text
-football_cv/
-├── configs/
-│ └── config.yaml                # Centralized configuration
-│
-├── src/
-│ ├── init.py                    # Package initialization
-│ ├── train_2d.py                # 2D detection training
-│ ├── inference_2d.py            # 2D detection inference
-│ ├── detection_3d.py            # 3D position estimation (coming soon)
-│ ├── trajectory.py              # Trajectory tracking (coming soon)
-│ └── bev.py                     # Bird's eye view (coming soon)
-│
-├── tools/
-│   ├── __init__.py              # Package initialization
-│   ├── config_loader.py         # Configuration loading utilities
-│   ├── visualization.py         # Drawing bboxes, labels, overlays
-│   ├── video_io.py              # Video reading/writing utilities
-│   └── detection_utils.py       # Detection processing utilities
-│
-├── data/
-│ └── V1/                        # Dataset from HuggingFace
-│ │ ├── images/
-│ │ │ ├── train/
-│ │ │ └── test/
-│ │ ├── labels/
-│ │ │ ├── train/
-│ │ │ └── test/
-│ └── data.yaml
-│
-├── outputs/
-│ ├── datasets/                  # Processed datasets
-│ │ └── processed/
-│ ├── models/                    # Trained model weights
-│ │ ├── train_run/
-│ │ ├── weights/
-│ │ ├── best.pt
-│ │ └── last.pt
-│ └── results/                   # Inference outputs
-│ │ ├── rgb_2d_detected.avi
-│ │ └── rgb_detections.json
-│
-├── rgb.avi                      # Input video
-├── requirements.txt             # Python dependencies
-└── README.md
-```
 
 ---
 
@@ -180,7 +128,7 @@ The training script automatically preprocesses the dataset:
 
 All project settings are in configs/config.yaml with complete documentation of all options.
 
-### 3. Training
+### 3. Training (creates new run)
 
 ```
 # Basic training (uses config.yaml defaults)
@@ -193,20 +141,26 @@ python src/train_2d.py --config configs/config.yaml --epochs 50 --batch-size 8
 python src/train_2d.py --config configs/config.yaml --skip-preprocessing
 ```
 
-### 4. Inference
+### 4. Inference (uses existing run)
 
 ```
 # Run detection on video
-python src/inference_2d.py --config configs/config.yaml
+python src/inference_2d.py --config configs/config.yaml --run-id run_001
 
 # Ball-only detection (ignore persons)
-python src/inference_2d.py --config configs/config.yaml --ball-only
+python src/inference_2d.py --config configs/config.yaml --run-id run_001 --ball-only
 
 # Disable preview window
-python src/inference_2d.py --config configs/config.yaml --no-preview
+python src/inference_2d.py --config configs/config.yaml --run-id run_001 --no-preview
 
 # Use specific model weights
-python src/inference_2d.py --config configs/config.yaml --model path/to/custom/weights.pt
+python src/inference_2d.py --config configs/config.yaml --run-id run_001 --model path/to/custom/weights.pt
+```
+
+#### List Available Runs
+
+```
+python -c "from tools.run_manager import RunManager; print(RunManager.list_runs())"
 ```
 
 ### 5. Output Files

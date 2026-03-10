@@ -1,6 +1,9 @@
 # Data
 data/V1/
 
+# Outputs
+outputs/
+
 # Python
 __pycache__/
 *.py[cod]

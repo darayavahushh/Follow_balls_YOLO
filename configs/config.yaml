@@ -62,7 +62,7 @@ training:
   
   # Hardware settings
   hardware:
-    device: 0               # GPU device ID (0, 1, ...) or "cpu"
+    device: "cpu"           # GPU device ID (0, 1, ...) or "cpu"
     workers: 8              # DataLoader worker processes
   
   # Checkpoint settings
@@ -117,6 +117,17 @@ visualization:
     show_ball_status: true
     font_scale: 0.8
     color: [0, 255, 255]      # Yellow (BGR)
+
+
+# -----------------------------------------------------------------------------
+# LOGGING CONFIGURATION
+# -----------------------------------------------------------------------------
+logging:    # Level ouputs: DEBUG, INFO, WARNING, ERROR
+  console_level: "INFO"
+  file_level: "DEBUG"
+  progress:
+    console_interval: 100      # Log to console every N frames
+    file_interval: 10         # Log to file every N frames
 
 
 # -----------------------------------------------------------------------------
