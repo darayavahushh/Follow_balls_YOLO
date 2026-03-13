@@ -10,6 +10,8 @@ Modules:
     - detection_utils: Detection data processing and formatting
     - logging_utils: Logging configuration and utilities
     - run_manager: Experiment run management
+    - depth_estimation: 3D position estimation from pinhole camera model
+    - trajectory: Trajectory tracking and trail visualization
 """
 
 from tools.config_loader import load_config, resolve_paths, get_nested_config
@@ -37,6 +39,8 @@ from tools.logging_utils import (
     log_function_call
 )
 from tools.run_manager import RunManager, RunInfo
+from tools.depth_estimation import DepthEstimator
+from tools.trajectory import TrajectoryTracker
 
 __all__ = [
     # Config
@@ -70,4 +74,8 @@ __all__ = [
     # Run management
     "RunManager",
     "RunInfo",
+    # Depth estimation
+    "DepthEstimator",
+    # Trajectory
+    "TrajectoryTracker",
 ]

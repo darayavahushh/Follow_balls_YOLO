@@ -140,6 +140,9 @@ inference:
   output_patterns:            # {video_name} is replaced with input video filename (without extension)
     video: "{video_name}_2d_detected.avi"
     detections: "{video_name}_detections.json"
+    video_3d: "{video_name}_3d_trajectory.avi"
+    excel_3d: "{video_name}_3d_positions.xlsx"
+    detections_3d: "{video_name}_3d_detections.json"
 
 
 # -----------------------------------------------------------------------------
@@ -177,27 +180,28 @@ camera:
 
 
 # -----------------------------------------------------------------------------
-# FUTURE: 3D DETECTION CONFIGURATION (Placeholder)
+# 3D DETECTION CONFIGURATION
 # -----------------------------------------------------------------------------
 detection_3d:
-  enabled: false  # Will be enabled in Step 2
+  enabled: true
   
   # Method for depth estimation without depth sensor
-  # Options: "pinhole_projection", "size_reference", "stereo"
+  # "size_reference" uses the known football diameter + pinhole camera model
   depth_method: "size_reference"
 
 
 # -----------------------------------------------------------------------------
-# FUTURE: TRAJECTORY TRACKING CONFIGURATION (Placeholder)
+# TRAJECTORY TRACKING CONFIGURATION
 # -----------------------------------------------------------------------------
 trajectory:
-  enabled: false  # Will be enabled in Step 3
-  
-  # Tracking algorithm: "kalman", "sort", "deepsort"
-  algorithm: "kalman"
+  enabled: true
   
   # Trajectory visualization
-  trail_length: 10          # Number of past positions to draw
+  trail_length: 30          # Number of past positions to draw
+  smoothing_window: 3       # Moving-average window (0 = no smoothing)
+  line_thickness: 2         # Polyline thickness in pixels
+  color: [0, 255, 255]      # BGR trail colour (yellow)
+  fade: true                # Fade older trail segments
   trail_color: [0, 255, 255]  # Yellow trail
 
 
