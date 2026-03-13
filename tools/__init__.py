@@ -12,6 +12,7 @@ Modules:
     - run_manager: Experiment run management
     - depth_estimation: 3D position estimation from pinhole camera model
     - trajectory: Trajectory tracking and trail visualization
+    - bev_map: Camera motion estimation and BEV top-view map rendering
 """
 
 from tools.config_loader import load_config, resolve_paths, get_nested_config
@@ -41,6 +42,7 @@ from tools.logging_utils import (
 from tools.run_manager import RunManager, RunInfo
 from tools.depth_estimation import DepthEstimator
 from tools.trajectory import TrajectoryTracker
+from tools.bev_map import CameraMotionEstimator, BEVMapRenderer, create_split_frame
 
 __all__ = [
     # Config
@@ -78,4 +80,8 @@ __all__ = [
     "DepthEstimator",
     # Trajectory
     "TrajectoryTracker",
+    # BEV map
+    "CameraMotionEstimator",
+    "BEVMapRenderer",
+    "create_split_frame",
 ]

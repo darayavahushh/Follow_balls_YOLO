@@ -143,6 +143,9 @@ inference:
     video_3d: "{video_name}_3d_trajectory.avi"
     excel_3d: "{video_name}_3d_positions.xlsx"
     detections_3d: "{video_name}_3d_detections.json"
+    video_bev: "{video_name}_bev_split.avi"
+    excel_bev: "{video_name}_bev_positions.xlsx"
+    detections_bev: "{video_name}_bev_detections.json"
 
 
 # -----------------------------------------------------------------------------
@@ -206,14 +209,30 @@ trajectory:
 
 
 # -----------------------------------------------------------------------------
-# FUTURE: BEV (Bird's Eye View) CONFIGURATION (Placeholder)
+# BEV (Bird's Eye View) / 2D TOP-VIEW MAP CONFIGURATION
 # -----------------------------------------------------------------------------
 bev:
-  enabled: false  # Will be enabled in Step 4
-  
-  # Output BEV map dimensions in pixels
-  map_width: 800
-  map_height: 600
-  
-  # Scale: pixels per meter
-  scale: 50
+  enabled: true
+
+  # BEV map is rendered as a square image (map_size × map_size pixels)
+  map_size: 500
+
+  # Scale factor for the video panel in split-view output (0 < s <= 1)
+  # Both panels are scaled so height = video_height × split_video_scale
+  split_video_scale: 0.75
+
+  # Colours (BGR)
+  bg_color: [40, 40, 40]          # Map background (dark gray)
+  grid_color: [80, 80, 80]        # Grid lines
+  camera_color: [255, 200, 0]     # Camera marker & trail (yellow-orange)
+  ball_color: [0, 255, 0]         # Ball marker & trail (green)
+
+  # Maximum number of trail points to keep in memory
+  trail_max: 500
+
+  # Camera ego-motion estimation parameters
+  motion:
+    min_features: 30              # Minimum tracked features to estimate motion
+    feature_quality: 0.01         # goodFeaturesToTrack quality threshold
+    feature_min_distance: 20      # Minimum distance between features (px)
+    translation_threshold: 0.005  # Ignore translations below this (metres)

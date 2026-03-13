@@ -1,22 +1,32 @@
 """
 =============================================================================
-Ball 3D Detection & Trajectory Tracking - Inference Pipeline
+Ball 2D Top-View Map (BEV) - Inference Pipeline
 =============================================================================
-Runs the trained YOLO26 model on a video, then for every frame:
+Produces a split-view video:
 
-  1.  Detects the ball (2D bounding-box).
-  2.  Estimates its 3D position (X, Y, Z) and distance using the pinhole
-      camera model + known football diameter.
-  3.  Maintains a trajectory trail and draws it on the frame.
+    Left  panel  - original video with bounding boxes, 3D overlay, and
+                   trajectory trail (same as inference_3d).
+    Right panel  - 2D top-view map showing the ball and camera positions
+                   in a fixed world frame that is **not affected by camera
+                   movement or shaking**.
+
+The ball's world-frame position is obtained by:
+    1.  Detecting the ball (YOLO) → 2D bounding box.
+    2.  Estimating depth via the known-ball-diameter + pinhole model → 3D
+        position in camera frame (X, Y, Z).
+    3.  Estimating frame-to-frame camera ego-motion via sparse optical
+        flow + Essential matrix decomposition.
+    4.  Accumulating the camera pose to transform the ball from camera
+        frame to a fixed world frame.
 
 Outputs:
-  • Annotated video  - bounding boxes + 3D info overlay + trajectory trail.
-  • Excel (.xlsx)    - per-frame table with columns:
-        frame, time_s, x_m, y_m, z_m, distance_m, cx_px, cy_px
+    • Split-view video (.avi)  - [annotated video | 2D top-view map]
+    • Excel (.xlsx)            - per-frame ball world positions
+    • JSON                     - full detection + 3D + world data
 
 Usage:
-    python src/inference_3d.py --config configs/config.yaml --run-id run_001
-    python src/inference_3d.py --config configs/config.yaml --run-id run_001 --no-preview
+    python src/inference_bev.py --config configs/config.yaml --run-id run_001
+    python src/inference_bev.py --config configs/config.yaml --run-id run_001 --no-preview
 =============================================================================
 """
 
@@ -24,24 +34,21 @@ Usage:
 # IMPORTS
 # =============================================================================
 
-# Standard library imports
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Add project root to path for imports
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(PROJECT_ROOT))
 
-# Third-party imports
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# Local imports from tools
 from tools.config_loader import load_config, resolve_paths
 from tools.visualization import draw_detection, draw_frame_overlay
 from tools.video_io import VideoReader, VideoWriter
@@ -54,78 +61,76 @@ from tools.logging_utils import setup_logger, log_summary, ProgressLogger
 from tools.run_manager import RunManager
 from tools.depth_estimation import DepthEstimator
 from tools.trajectory import TrajectoryTracker
+from tools.bev_map import CameraMotionEstimator, BEVMapRenderer, create_split_frame
 
 
 # =============================================================================
 # CONSTANTS
 # =============================================================================
 
-OPERATION_NAME = "inference_3d"
+OPERATION_NAME = "inference_bev"
 
 
 # =============================================================================
-# EXCEL EXPORT
+# EXCEL EXPORT (reused from inference_3d with world-frame columns)
 # =============================================================================
 
-def save_results_excel(
+def save_bev_excel(
     records: List[Dict[str, Any]],
     output_path: str,
     logger,
 ) -> None:
     """
-    Save 3D detection results to an Excel (.xlsx) file.
-
-    Each row corresponds to a frame where the ball was detected.
-
-    Args:
-        records:     List of dicts with keys frame, time_s, x_m, y_m, z_m,
-                     distance_m, cx_px, cy_px, confidence.
-        output_path: Destination .xlsx path.
-        logger:      Logger instance.
+    Save BEV results to Excel.  Each row is a frame where the ball was
+    detected.  Columns include both camera-frame and world-frame
+    positions.
     """
     try:
         import openpyxl
     except ImportError:
         logger.warning(
-            "openpyxl not installed - falling back to CSV export.  "
+            "openpyxl not installed - falling back to CSV.  "
             "Install with: pip install openpyxl"
         )
-        _save_results_csv(records, output_path.replace(".xlsx", ".csv"), logger)
+        _save_bev_csv(records, output_path.replace(".xlsx", ".csv"), logger)
         return
 
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "3D Ball Positions"
+    ws.title = "BEV Ball Positions"
 
-    # Header
     headers = [
         "Frame", "Time (s)",
-        "X (m)", "Y (m)", "Z (m)", "Distance (m)",
-        "Center X (px)", "Center Y (px)", "Confidence",
+        "Cam X (m)", "Cam Y (m)", "Cam Z (m)",
+        "Ball X cam (m)", "Ball Y cam (m)", "Ball Z cam (m)",
+        "Distance (m)",
+        "Ball X world (m)", "Ball Y world (m)", "Ball Z world (m)",
+        "Confidence",
     ]
     ws.append(headers)
 
-    # Style header
     from openpyxl.styles import Font, Alignment
     for cell in ws[1]:
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal="center")
 
-    # Data rows
     for r in records:
         ws.append([
             r["frame"],
             round(r["time_s"], 4),
-            round(r["x_m"], 4),
-            round(r["y_m"], 4),
-            round(r["z_m"], 4),
+            round(r["cam_x"], 4),
+            round(r["cam_y"], 4),
+            round(r["cam_z"], 4),
+            round(r["ball_x_cam"], 4),
+            round(r["ball_y_cam"], 4),
+            round(r["ball_z_cam"], 4),
             round(r["distance_m"], 4),
-            round(r["cx_px"], 2),
-            round(r["cy_px"], 2),
+            round(r["ball_x_world"], 4),
+            round(r["ball_y_world"], 4),
+            round(r["ball_z_world"], 4),
             round(r["confidence"], 4),
         ])
 
-    # Auto-width columns
     for col in ws.columns:
         max_len = max(len(str(cell.value or "")) for cell in col)
         ws.column_dimensions[col[0].column_letter].width = max_len + 3
@@ -134,49 +139,36 @@ def save_results_excel(
     logger.info(f"      Excel: {output_path}")
 
 
-def _save_results_csv(
+def _save_bev_csv(
     records: List[Dict[str, Any]],
     output_path: str,
     logger,
 ) -> None:
-    """Fallback CSV export when openpyxl is not available."""
     import csv
-
     fieldnames = [
         "frame", "time_s",
-        "x_m", "y_m", "z_m", "distance_m",
-        "cx_px", "cy_px", "confidence",
+        "cam_x", "cam_y", "cam_z",
+        "ball_x_cam", "ball_y_cam", "ball_z_cam",
+        "distance_m",
+        "ball_x_world", "ball_y_world", "ball_z_world",
+        "confidence",
     ]
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(records)
-
     logger.info(f"      CSV (fallback): {output_path}")
 
 
 # =============================================================================
-# 3D INFO OVERLAY
+# 3D INFO OVERLAY (same as inference_3d)
 # =============================================================================
 
-def draw_3d_overlay(
+def _draw_3d_overlay(
     frame: np.ndarray,
     pos_3d: Optional[Dict[str, float]],
     config: Dict[str, Any],
 ) -> np.ndarray:
-    """
-    Draw the estimated 3D position + distance text on the frame.
-
-    Placed just below the standard frame-overlay line.
-
-    Args:
-        frame:  BGR image (modified in-place).
-        pos_3d: Result dict from DepthEstimator.estimate(), or None.
-        config: Project config.
-
-    Returns:
-        Annotated frame.
-    """
     if pos_3d is None:
         text = "3D: N/A"
     else:
@@ -187,15 +179,9 @@ def draw_3d_overlay(
     font_scale = overlay_cfg.get("font_scale", 0.8)
 
     cv2.putText(
-        frame,
-        text,
-        (10, 60),  # second line, below the standard overlay at y=30
-        cv2.FONT_HERSHEY_SIMPLEX,
-        font_scale * 0.7,
-        color,
-        2,
+        frame, text, (10, 60),
+        cv2.FONT_HERSHEY_SIMPLEX, font_scale * 0.7, color, 2,
     )
-
     return frame
 
 
@@ -203,37 +189,31 @@ def draw_3d_overlay(
 # INFERENCE ENGINE
 # =============================================================================
 
-def run_inference_3d(
+def run_inference_bev(
     config: Dict[str, Any],
     run_manager: RunManager,
     logger,
 ) -> List[Dict[str, Any]]:
     """
-    Run combined 2D detection + 3D estimation + trajectory tracking.
-
-    Args:
-        config:       Configuration dictionary.
-        run_manager:  Run manager instance.
-        logger:       Logger instance.
-
-    Returns:
-        List of per-frame result dictionaries.
+    Run 2D detection + 3D estimation + camera motion + BEV map generation.
+    Produces a split-view video and an Excel file with world-frame
+    ball positions.
     """
     # ── settings ────────────────────────────────────────────────────
     model_config = config["model"]
     inf_config = config["inference"]
-    traj_config = config.get("trajectory", {})
+    bev_config = config.get("bev", {})
     paths = config["paths"]
     conf_threshold = model_config["confidence_threshold"]
+    split_scale = float(bev_config.get("split_video_scale", 0.75))
 
     # ── model ───────────────────────────────────────────────────────
     model_path = str(run_manager.get_model_path("best.pt"))
-
     if not Path(model_path).exists():
         logger.error(f"Model weights not found: {model_path}")
         raise FileNotFoundError(
             f"Model weights not found: {model_path}\n"
-            f"Please ensure training was completed for run: {run_manager.run_id}"
+            f"Ensure training was completed for run: {run_manager.run_id}"
         )
 
     logger.info(f"Loading model: {model_path}")
@@ -241,41 +221,45 @@ def run_inference_3d(
     class_names = model.names
     logger.debug(f"Model classes: {class_names}")
 
-    # ── 3D estimator & trajectory tracker ───────────────────────────
+    # ── modules ─────────────────────────────────────────────────────
     estimator = DepthEstimator(config)
     tracker = TrajectoryTracker(config)
+    motion = CameraMotionEstimator(config)
+    bev_renderer = BEVMapRenderer(config)
 
-    logger.debug(f"Ball real diameter: {estimator.ball_diameter_m:.3f} m")
-    logger.debug(f"Trajectory trail length: {tracker.trail_length}")
+    logger.debug(f"Ball diameter: {estimator.ball_diameter_m:.3f} m")
+    logger.debug(f"Trajectory trail: {tracker.trail_length}")
+    logger.debug(f"BEV map size: {bev_renderer.map_size}px")
+    logger.debug(f"Split scale: {split_scale}")
 
-    # ── paths ───────────────────────────────────────────────────────
+    # ── output paths ────────────────────────────────────────────────
     video_path = paths["input_video"]
     video_stem = Path(video_path).stem
+    patterns = inf_config.get("output_patterns", {})
 
-    output_patterns = inf_config.get("output_patterns", {})
-    output_video_path = str(
+    output_video = str(
         run_manager.results_dir
-        / output_patterns.get("video_3d", "{video_name}_3d_trajectory.avi").format(
-            video_name=video_stem
-        )
+        / patterns.get(
+            "video_bev", "{video_name}_bev_split.avi"
+        ).format(video_name=video_stem)
     )
-    output_excel_path = str(
+    output_excel = str(
         run_manager.results_dir
-        / output_patterns.get("excel_3d", "{video_name}_3d_positions.xlsx").format(
-            video_name=video_stem
-        )
+        / patterns.get(
+            "excel_bev", "{video_name}_bev_positions.xlsx"
+        ).format(video_name=video_stem)
     )
-    output_json_path = str(
+    output_json = str(
         run_manager.results_dir
-        / output_patterns.get("detections_3d", "{video_name}_3d_detections.json").format(
-            video_name=video_stem
-        )
+        / patterns.get(
+            "detections_bev", "{video_name}_bev_detections.json"
+        ).format(video_name=video_stem)
     )
 
     logger.debug(f"Input video:  {video_path}")
-    logger.debug(f"Output video: {output_video_path}")
-    logger.debug(f"Output Excel: {output_excel_path}")
-    logger.debug(f"Output JSON:  {output_json_path}")
+    logger.debug(f"Output video: {output_video}")
+    logger.debug(f"Output Excel: {output_excel}")
+    logger.debug(f"Output JSON:  {output_json}")
 
     # ── process video ───────────────────────────────────────────────
     all_frame_data: List[Dict[str, Any]] = []
@@ -291,21 +275,25 @@ def run_inference_3d(
         logger.info(f"   Total Frames: {props.total_frames}")
         logger.info(f"   Duration: {props.duration_sec:.2f}s")
         logger.info("")
-        logger.info("🔍 Processing video (3D + trajectory)...")
+        logger.info("🔍 Processing video (BEV split-view)...")
 
         progress = ProgressLogger(
-            logger,
-            props.total_frames,
-            prefix="Progress",
-            console_interval=50,
-            file_interval=10,
+            logger, props.total_frames,
+            prefix="Progress", console_interval=50, file_interval=10,
         )
 
+        # Compute split-view output dimensions for the VideoWriter
+        target_h = int(props.height * split_scale)
+        target_vw = int(props.width * split_scale)
+        map_h = bev_renderer.map_size
+        target_mw = int(bev_renderer.map_size * (target_h / map_h))
+        out_w = target_vw + 2 + target_mw  # +2 for divider
+
         with VideoWriter(
-            output_video_path,
+            output_video,
             fps=reader.fps,
-            width=reader.width,
-            height=reader.height,
+            width=out_w,
+            height=target_h,
             codec=inf_config.get("video_codec", "XVID"),
         ) as writer:
 
@@ -315,53 +303,71 @@ def run_inference_3d(
 
                 frame_detections = []
                 for box in results.boxes:
-                    detection = extract_detection_data(box, class_names)
-                    frame_detections.append(detection)
+                    det = extract_detection_data(box, class_names)
+                    frame_detections.append(det)
 
                 frame_data = format_frame_detections(
-                    frame_idx, reader.fps, frame_detections
+                    frame_idx, reader.fps, frame_detections,
                 )
 
-                # ── 3D estimation (ball only) ───────────────────────
+                # ── 3D estimation ───────────────────────────────────
                 pos_3d: Optional[Dict[str, float]] = None
+                ball_depth: Optional[float] = None
 
                 if frame_data["ball_detected"]:
                     pos_3d = estimator.estimate(
                         frame_data["ball_bbox"],
                         (reader.height, reader.width),
                     )
+                    ball_depth = pos_3d.get("z_m")
                     frame_data["pos_3d"] = pos_3d
-
-                    # Record for Excel
-                    excel_records.append(
-                        {
-                            "frame": frame_idx,
-                            "time_s": frame_data["timestamp_sec"],
-                            "x_m": pos_3d["x_m"],
-                            "y_m": pos_3d["y_m"],
-                            "z_m": pos_3d["z_m"],
-                            "distance_m": pos_3d["distance_m"],
-                            "cx_px": frame_data["ball_center"][0],
-                            "cy_px": frame_data["ball_center"][1],
-                            "confidence": frame_data["ball_confidence"],
-                        }
-                    )
                 else:
                     frame_data["pos_3d"] = None
 
+                # ── camera motion ───────────────────────────────────
+                motion.update(frame, ball_depth=ball_depth)
+                cam_world = motion.get_camera_world_pos()
+
+                # ── ball → world frame ──────────────────────────────
+                ball_world: Optional[Dict[str, float]] = None
+                if pos_3d is not None:
+                    ball_world = motion.transform_to_world(pos_3d)
+
+                frame_data["ball_world"] = ball_world
+                frame_data["cam_world"] = {
+                    "x_m": float(cam_world[0]),
+                    "y_m": float(cam_world[1]),
+                    "z_m": float(cam_world[2]),
+                }
                 all_frame_data.append(frame_data)
 
-                # ── trajectory update ───────────────────────────────
-                tracker.update(
-                    frame_idx,
-                    frame_data["ball_center"],
-                    pos_3d,
-                )
+                # ── BEV update ──────────────────────────────────────
+                bev_renderer.update(cam_world, ball_world)
 
-                # ── draw annotated frame ────────────────────────────
+                # ── trajectory update ───────────────────────────────
+                tracker.update(frame_idx, frame_data["ball_center"], pos_3d)
+
+                # ── Excel record ────────────────────────────────────
+                if pos_3d is not None and ball_world is not None:
+                    excel_records.append({
+                        "frame": frame_idx,
+                        "time_s": frame_data["timestamp_sec"],
+                        "cam_x": cam_world[0],
+                        "cam_y": cam_world[1],
+                        "cam_z": cam_world[2],
+                        "ball_x_cam": pos_3d["x_m"],
+                        "ball_y_cam": pos_3d["y_m"],
+                        "ball_z_cam": pos_3d["z_m"],
+                        "distance_m": pos_3d["distance_m"],
+                        "ball_x_world": ball_world["x_m"],
+                        "ball_y_world": ball_world["y_m"],
+                        "ball_z_world": ball_world["z_m"],
+                        "confidence": frame_data["ball_confidence"],
+                    })
+
+                # ── annotate left panel ─────────────────────────────
                 annotated = frame.copy()
 
-                # Bounding boxes (all detections)
                 for det in frame_detections:
                     x1, y1, x2, y2 = det["bbox_xyxy"]
                     annotated = draw_detection(
@@ -369,22 +375,23 @@ def run_inference_3d(
                         det["class_name"], det["confidence"], config,
                     )
 
-                # Standard overlay (frame number + ball status)
                 annotated = draw_frame_overlay(
-                    annotated, frame_idx, frame_data["ball_detected"], config,
+                    annotated, frame_idx,
+                    frame_data["ball_detected"], config,
                 )
-
-                # 3D info overlay
-                annotated = draw_3d_overlay(annotated, pos_3d, config)
-
-                # Trajectory trail
+                annotated = _draw_3d_overlay(annotated, pos_3d, config)
                 annotated = tracker.draw(annotated, config)
 
-                writer.write(annotated)
+                # ── render BEV map (right panel) ────────────────────
+                map_img = bev_renderer.render()
+
+                # ── compose split-view ──────────────────────────────
+                split = create_split_frame(annotated, map_img, split_scale)
+                writer.write(split)
 
                 # Preview
                 if inf_config.get("show_preview", False):
-                    cv2.imshow("3D Detection + Trajectory", annotated)
+                    cv2.imshow("BEV Split View", split)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         logger.warning("Preview closed by user")
                         break
@@ -395,19 +402,23 @@ def run_inference_3d(
 
     # ── stats ───────────────────────────────────────────────────────
     stats = calculate_detection_stats(all_frame_data)
-
     logger.debug(f"Total detections: {stats['total_detections']}")
     logger.debug(f"Ball detection rate: {stats['ball_detection_rate']:.1f}%")
 
     # ── save Excel ──────────────────────────────────────────────────
-    save_results_excel(excel_records, output_excel_path, logger)
+    save_bev_excel(excel_records, output_excel, logger)
 
     # ── save JSON ───────────────────────────────────────────────────
-    # Make pos_3d JSON-safe (NaN → null)
     def _sanitize(obj):
-        """Replace NaN/Inf with None for JSON compatibility."""
-        if isinstance(obj, float) and (obj != obj or obj == float("inf")):
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
             return None
+        if isinstance(obj, np.floating):
+            v = float(obj)
+            return None if (math.isnan(v) or math.isinf(v)) else v
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
         if isinstance(obj, dict):
             return {k: _sanitize(v) for k, v in obj.items()}
         if isinstance(obj, list):
@@ -423,35 +434,30 @@ def run_inference_3d(
             "classes": {int(k): v for k, v in class_names.items()},
         },
         "camera_info": {
-            "fx": estimator.fx,
-            "fy": estimator.fy,
-            "cx": estimator.cx,
-            "cy": estimator.cy,
+            "fx": estimator.fx, "fy": estimator.fy,
+            "cx": estimator.cx, "cy": estimator.cy,
             "ball_diameter_m": estimator.ball_diameter_m,
         },
         "statistics": stats,
         "frames": _sanitize(all_frame_data),
     }
 
-    with open(output_json_path, "w", encoding="utf-8") as f:
+    with open(output_json, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2)
-
-    logger.debug(f"JSON saved to: {output_json_path}")
+    logger.debug(f"JSON saved to: {output_json}")
 
     # ── summary ─────────────────────────────────────────────────────
     logger.info("")
     logger.info("✅ Processing complete!")
-    logger.info(f"      Output video: {output_video_path}")
-    logger.info(f"      Excel:        {output_excel_path}")
-    logger.info(f"      JSON:         {output_json_path}")
+    logger.info(f"      Split video: {output_video}")
+    logger.info(f"      Excel:       {output_excel}")
+    logger.info(f"      JSON:        {output_json}")
     logger.info(
         f"      Ball detected in {stats['ball_detected_frames']}/"
         f"{stats['total_frames']} frames "
         f"({stats['ball_detection_rate']:.1f}%)"
     )
-    logger.info(
-        f"      3D records:   {len(excel_records)} rows written to Excel"
-    )
+    logger.info(f"      BEV records: {len(excel_records)} rows in Excel")
 
     return all_frame_data
 
@@ -461,40 +467,32 @@ def run_inference_3d(
 # =============================================================================
 
 def main() -> None:
-    """Main entry point for 3D detection + trajectory inference."""
+    """Main entry point for BEV split-view inference."""
 
     parser = argparse.ArgumentParser(
-        description="Run 3D ball detection & trajectory tracking on video",
+        description="Generate 2D top-view map with split-view video",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
-        "--config",
-        type=str,
-        default="configs/config.yaml",
+        "--config", type=str, default="configs/config.yaml",
         help="Path to configuration file",
     )
     parser.add_argument(
-        "--run-id",
-        type=str,
-        required=True,
+        "--run-id", type=str, required=True,
         help="Run ID to use (e.g., run_001). Must contain trained weights.",
     )
     parser.add_argument(
-        "--no-preview",
-        action="store_true",
+        "--no-preview", action="store_true",
         help="Disable real-time preview window",
     )
 
     args = parser.parse_args()
-
-    # Record start time
     start_time = time.time()
 
     # Load and resolve config
     config = load_config(args.config)
     config = resolve_paths(config, PROJECT_ROOT)
 
-    # Apply CLI overrides
     if args.no_preview:
         config["inference"]["show_preview"] = False
 
@@ -506,10 +504,9 @@ def main() -> None:
     log_path = run_manager.get_log_path(OPERATION_NAME)
     logger = setup_logger(OPERATION_NAME, log_path, config)
 
-    # Log run info
     logger.info("")
     logger.info("=" * 60)
-    logger.info("⚽ BALL 3D DETECTION & TRAJECTORY TRACKING")
+    logger.info("⚽ BALL 2D TOP-VIEW MAP (BEV) - SPLIT VIEW")
     logger.info("=" * 60)
     logger.info(f"   Run ID:  {run_manager.run_id}")
     logger.info(f"   Config:  {args.config}")
@@ -519,7 +516,7 @@ def main() -> None:
     logger.debug(f"Run directory: {run_manager.run_dir}")
 
     try:
-        all_frame_data = run_inference_3d(config, run_manager, logger)
+        all_frame_data = run_inference_bev(config, run_manager, logger)
 
         duration = time.time() - start_time
         stats = calculate_detection_stats(all_frame_data)
@@ -532,7 +529,7 @@ def main() -> None:
 
         logger.info("")
         logger.info("=" * 60)
-        logger.info("✅ 3D DETECTION & TRAJECTORY COMPLETE")
+        logger.info("✅ BEV SPLIT-VIEW COMPLETE")
         logger.info("=" * 60)
         logger.info(f"   Run ID:   {run_manager.run_id}")
         logger.info(f"   Results:  {run_manager.results_dir}")
