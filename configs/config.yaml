@@ -36,9 +36,9 @@ model:
 # TRAINING CONFIGURATION
 # -----------------------------------------------------------------------------
 training:
-  epochs: 100
+  epochs: 60
   batch_size: 16
-  patience: 20    # stop if no improvement for N epochs
+  patience: 10    # Stop if no improvement for N epochs
   
   # Learning rate settings
   optimizer:
@@ -62,7 +62,7 @@ training:
   
   # Hardware settings
   hardware:
-    device: "cpu"           # GPU device ID (0, 1, ...) or "cpu"
+    device: 0               # GPU device ID (0, 1, ...) or "cpu"
     workers: 8              # DataLoader worker processes
   
   # Checkpoint settings

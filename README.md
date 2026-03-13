@@ -99,17 +99,25 @@ pip install -r requirements.txt
 
 ### 4. Download Dataset
 Download the soccer dataset from HuggingFace:
-Option 1: Using huggingface_hub
-```
-pip install huggingface_hub
-python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='Adit-jain/Soccana_player_ball_detection_v1', local_dir='data/V1', repo_type='dataset')"
-```
+Option 1: Run the scrips located in ```data/```
+- For Linux:
+  ```
+  chmod +x .data/download_dataset.sh
+  ./data/download_dataset.sh
+  ```
+- For Windows:
+  ```
+  Double click or run in cmd ./data/download_dataset.bat
+  ```
+
 Option 2: Using git
 ```
 # Make sure git-xet is installed (https://hf.co/docs/hub/git-xet)
 winget install git-xet
 
 git clone https://huggingface.co/datasets/Adit-jain/Soccana_player_ball_detection_v1
+
+# Unzip the V1.zip and store it in ./data/V1
 ```
 
 ---
