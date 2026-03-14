@@ -26,7 +26,7 @@ paths:
 # MODEL CONFIGURATION (YOLO26)
 # -----------------------------------------------------------------------------
 model:
-  name: "yolo26s.pt"  # yolo26m.pt
+  name: "yolo26s.pt"  # yolo26s.pt / yolo26m.pt
   image_size: 640
   confidence_threshold: 0.3
   iou_threshold: 0.45
@@ -36,9 +36,9 @@ model:
 # TRAINING CONFIGURATION
 # -----------------------------------------------------------------------------
 training:
-  epochs: 60
+  epochs: 70
   batch_size: 16
-  patience: 10    # Stop if no improvement for N epochs
+  patience: 5    # Stop if no improvement for N epochs
   
   # Learning rate settings
   optimizer:

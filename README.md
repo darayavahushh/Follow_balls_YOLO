@@ -87,14 +87,14 @@ cd Follow_balls_YOLO
 We use a dedicated virtual environment named ball_cv to isolate project dependencies.
 Using venv:
 ```
-python -m venv ball_cv
-source ball_cv/bin/activate  # Linux/Mac
-ball_cv\Scripts\activate     # Windows
+python -m venv venv
+source venv/bin/activate  # Linux/Mac
+venv\Scripts\activate     # Windows
 ```
 Using conda:
 ```
-conda create -n ball_cv python=3.10
-conda activate ball_cv
+conda create -n venv python=3.10
+conda activate venv
 ```
 
 ### 3. Install Dependencies
